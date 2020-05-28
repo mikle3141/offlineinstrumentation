@@ -1,0 +1,144 @@
+plugins {
+    id "org.springframework.boot" version "2.2.5.RELEASE" apply false
+    id 'io.spring.dependency-management' version '1.0.9.RELEASE'
+    id 'java'
+    id 'io.qameta.allure' version '2.7.0'
+}
+
+group 'jacocomultimodulesample'
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    springBootVersion = "2.2.5.RELEASE"
+    allureVersion = "2.7.0"
+}
+
+apply plugin: "idea"
+apply plugin: 'java-library'
+apply plugin: 'jacoco'
+
+def allureResultDirName = "allure-results"
+
+allprojects {
+    apply plugin: "idea"
+    apply plugin: 'java-library'
+    apply plugin: 'jacoco'
+    apply plugin: 'io.qameta.allure'
+    apply plugin: 'maven'
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+    }
+
+    repositories {
+        mavenCentral()
+        jcenter()
+    }
+    idea {
+        module {
+            downloadJavadoc = true
+            downloadSources = true
+        }
+    }
+
+    jacoco {
+        toolVersion = "0.8.5"
+    }
+
+    /******* ALLURE ***************/
+    allure {
+        autoconfigure = true
+        version = "$allureVersion"  // Latest Allure Version
+        reportDir = file("$projectDir/build/allure-report")
+        resultsDir = file("$projectDir/build/$allureResultDirName")
+        useJUnit5 {
+            version = "$allureVersion"
+        }
+    }
+}
+
+/******* JACOCO ***************/
+
+def allTestCoverageFile = "$buildDir/jacoco/allTestCoverage.exec" //merging jacoco
+
+task jacocoMergeTest(type: JacocoMerge) {
+    destinationFile = file(allTestCoverageFile)
+    executionData = project.fileTree(dir: '.', include:'**/build/jacoco/test.exec')
+}
+
+task jacocoMerge(dependsOn: ['jacocoMergeTest','jacocoRootReport']) {
+    // used to run the other merge tasks
+}
+
+task jacocoRootReport(type: org.gradle.testing.jacoco.tasks.JacocoReport) {
+    dependsOn = subprojects.test
+    sourceDirectories.from = files(subprojects.sourceSets.main.allSource.srcDirs)
+    classDirectories.from =  files(subprojects.sourceSets.main.output)
+    executionData.from = files(subprojects.jacocoTestReport.executionData).filter { f -> f.exists() }
+    reports {
+        xml.enabled = true
+        csv.enabled = false
+        html.enabled = true
+    }
+    onlyIf{
+        true
+    }
+}
+
+/***** merge allure ****/
+
+task allureMerge(type: Copy) {
+    into "$buildDir/$allureResultDirName"
+    from subprojects.collect { "${it.buildDir}/$allureResultDirName" }
+}
+
+subprojects {
+    apply plugin: "io.spring.dependency-management"
+
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+
+    dependencyManagement {
+        imports {
+            mavenBom "org.springframework.boot:spring-boot-dependencies:${springBootVersion}"
+        }
+    }
+
+    test {
+        ignoreFailures false
+        // Fail the 'test' task on the first test failure
+        failFast = false
+
+        useJUnitPlatform()
+
+        systemProperty 'allure.results.directory', "${projectDir}/build/allure-results"
+
+        // listen to events in the test execution lifecycle
+        beforeTest { descriptor ->
+            logger.lifecycle("Running test: " + descriptor)
+        }
+    }
+
+    jacocoTestReport {
+        afterEvaluate {
+            classDirectories.from = files(classDirectories.files.collect {
+                fileTree(dir: it, exclude: '*Test.java')
+            })
+        }
+
+        reports {
+            html.enabled = true
+            xml.enabled = true
+            csv.enabled = false
+        }
+    }
+
+}
+
+test.finalizedBy(project.tasks.jacocoMerge, project.tasks.allureMerge)
